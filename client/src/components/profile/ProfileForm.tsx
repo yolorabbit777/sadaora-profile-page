@@ -1,14 +1,18 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import { useProfile } from "../../hooks/useProfile";
 import { ProfileFormData } from "../../types/profile.types";
 import Input from "../common/Input";
 import Button from "../common/Button";
 import InterestTags from "./InterestTags";
 
+import { CLOUDINARY_UPLOAD_URL, CLOUDINARY_UPLOAD_PRESET } from "../../config";
+
 const ProfileForm: React.FC = () => {
     const navigate = useNavigate();
     const { profile, loading, saveProfile } = useProfile();
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState<ProfileFormData>({
         name: "",
@@ -21,6 +25,9 @@ const ProfileForm: React.FC = () => {
     const [formErrors, setFormErrors] = useState<Record<string, string>>({});
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [uploadingImage, setUploadingImage] = useState<boolean>(false);
+    const [uploadError, setUploadError] = useState<string | null>(null);
+    const [uploadProgress, setUploadProgress] = useState<number>(0);
 
     // Initialize form data when profile is loaded
     useEffect(() => {
@@ -52,6 +59,77 @@ const ProfileForm: React.FC = () => {
 
     const handleInterestsChange = (interests: string[]) => {
         setFormData((prev) => ({ ...prev, interests }));
+    };
+
+    const handleAvatarClick = () => {
+        if (fileInputRef.current) {
+            fileInputRef.current.click();
+        }
+    };
+
+    const uploadToCloudinary = async (file: File): Promise<string> => {
+        try {
+            // Create a FormData object to send the file
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+            formData.append("folder", "user_avatars"); // Optional: organize uploads in a folder
+
+            // Use axios to upload the file with progress tracking
+            const response = await axios.post(CLOUDINARY_UPLOAD_URL, formData, {
+                onUploadProgress: (progressEvent) => {
+                    if (progressEvent.total) {
+                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                        setUploadProgress(percentCompleted);
+                    }
+                },
+            });
+
+            // Return the secure URL of the uploaded image
+            return response.data.secure_url;
+        } catch (error) {
+            console.error("Error uploading to Cloudinary:", error);
+            throw error;
+        }
+    };
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        // Validate file type
+        if (!file.type.startsWith("image/")) {
+            setUploadError("Please select an image file.");
+            return;
+        }
+
+        // Validate file size (e.g., max 2MB)
+        const maxSize = 2 * 1024 * 1024; // 2MB
+        if (file.size > maxSize) {
+            setUploadError("Image size should be less than 2MB.");
+            return;
+        }
+
+        setUploadingImage(true);
+        setUploadError(null);
+        setUploadProgress(0);
+
+        try {
+            // Upload to Cloudinary
+            const imageUrl = await uploadToCloudinary(file);
+
+            // Update form data with the Cloudinary URL
+            setFormData((prev) => ({
+                ...prev,
+                photoUrl: imageUrl,
+            }));
+        } catch (error) {
+            setUploadError("Failed to upload image. Please try again.");
+            console.error("Upload error:", error);
+        } finally {
+            setUploadingImage(false);
+            setUploadProgress(0);
+        }
     };
 
     const validateForm = (): boolean => {
@@ -120,7 +198,47 @@ const ProfileForm: React.FC = () => {
                     {formErrors.bio && <p className="mt-1 text-sm text-red-600">{formErrors.bio}</p>}
                 </div>
 
-                <Input label="Profile Photo URL" type="url" name="photoUrl" value={formData.photoUrl} onChange={handleChange} placeholder="https://example.com/photo.jpg" error={formErrors.photoUrl} />
+                {/* Avatar Upload Section */}
+                <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Profile Photo</label>
+                    <div className="flex items-center space-x-4">
+                        <div onClick={handleAvatarClick} className="w-24 h-24 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer overflow-hidden hover:border-blue-500 transition-colors">
+                            {formData.photoUrl ? (
+                                <img
+                                    src={formData.photoUrl}
+                                    alt="Profile avatar"
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => {
+                                        // Handle image loading error
+                                        e.currentTarget.src = "/placeholder-avatar.png"; // Replace with your placeholder
+                                    }}
+                                />
+                            ) : uploadingImage ? (
+                                <div className="text-center">
+                                    <div className="w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
+                                        <div className="h-full bg-blue-500" style={{ width: `${uploadProgress}%` }}></div>
+                                    </div>
+                                    <span className="text-xs text-gray-500 mt-1">{uploadProgress}%</span>
+                                </div>
+                            ) : (
+                                <div className="text-gray-400 text-xs text-center">Click to upload</div>
+                            )}
+                        </div>
+                        <div className="flex-1">
+                            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+                            <Button type="button" variant="secondary" onClick={handleAvatarClick} disabled={uploadingImage}>
+                                {formData.photoUrl ? "Change Photo" : "Upload Photo"}
+                            </Button>
+                            {formData.photoUrl && (
+                                <Button type="button" variant="danger" onClick={() => setFormData((prev) => ({ ...prev, photoUrl: "" }))} className="ml-2">
+                                    Remove
+                                </Button>
+                            )}
+                            <p className="text-sm text-gray-500 mt-1">Max file size: 2MB. Recommended dimensions: 200x200px.</p>
+                            {uploadError && <p className="text-sm text-red-600 mt-1">{uploadError}</p>}
+                        </div>
+                    </div>
+                </div>
 
                 <div className="mb-4">
                     <label className="block text-sm font-medium text-gray-700 mb-1">Interests</label>
@@ -131,7 +249,7 @@ const ProfileForm: React.FC = () => {
                     <Button type="button" variant="secondary" onClick={() => navigate("/profile")}>
                         Cancel
                     </Button>
-                    <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>
+                    <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting || uploadingImage}>
                         Save Profile
                     </Button>
                 </div>
